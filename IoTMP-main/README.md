@@ -1,146 +1,106 @@
-# Modek — Finger Flick Accessibility Control
+🖐️ Modek — Finger Flick Gesture Control System
 
-A real-time hand gesture recognition system that maps finger flick movements to smart home commands (Light, Fan, Alarm, AC, TV). Built with MediaPipe, PyQt6, OpenCV, WebSocket streaming, and Arduino hardware integration.
+Modek is a real-time, vision-based human–computer interaction (HCI) system that performs kinematic gesture inference by mapping finger motion primitives to discrete smart-home control commands.
 
----
+📑 Table of Contents
+Overview
+System Architecture
+Gesture Processing Pipeline
+Interaction Model
+Hardware Integration
+Calibration & Adaptation
+Core Features
+Tech Stack
+📌 Overview
 
-## What It Does
+Modek leverages monocular RGB input, probabilistic hand landmark estimation, and signal processing techniques to enable low-latency, noise-resilient gesture recognition. It is designed for real-time performance and robust interaction in unconstrained environments.
 
-The user performs quick finger flick gestures in front of a webcam. The system detects which finger flicked, maps it to a command, fires it to the UI and optionally sends it to an Arduino to control physical hardware (LEDs, buzzer).
+🏗️ System Architecture
 
-| Gesture | Normal Layer | Advanced Layer (Pinch ON) |
-|---------|-------------|--------------------------|
-| Index flick | Light (toggle ON/OFF) | — (disabled) |
-| Middle flick | Fan (toggle ON/OFF) | AC (toggle ON/OFF) |
-| Ring/Pinky flick | Alarm (3s trigger) | TV (toggle ON/OFF) |
-| Thumb + Index pinch | Switch to Advanced | Switch to Normal |
+The system follows a distributed, event-driven dual-service architecture:
 
----
+Service 1 (Capture Layer)
+Performs high-frequency frame acquisition and MediaPipe-based 3D hand landmark regression. Streams normalized landmark data (~30 FPS) via WebSockets.
+Service 2 (Analysis Layer)
+Executes gesture inference using temporal modeling, signal conditioning, and decision logic.
 
-## Architecture
+This separation ensures scalability, modularity, and cross-device deployment.
 
-```
-┌─────────────────────────┐        WebSocket        ┌──────────────────────────┐
-│   Service 1 (Laptop 1)  │ ──────────────────────▶ │   Service 2 (Laptop 2)   │
-│                         │   landmark JSON @ 30fps  │                          │
-│  - Webcam capture       │   control messages       │  - FingerUnit FSMs       │
-│  - MediaPipe landmarks  │                          │  - WTA logic             │
-│  - Guided calib UI      │                          │  - Pinch layer           │
-│  - Live overlay         │                          │  - Command triggers      │
-│                         │                          │  - PyQt6 demo UI         │
-└─────────────────────────┘                          └──────────────────────────┘
-                                                               │
-                                                    USB serial / WiFi HTTP
-                                                               │
-                                                    ┌──────────────────────────┐
-                                                    │   Arduino                │
-                                                    │  - LEDs (Light/Fan/AC/TV)│
-                                                    │  - Buzzer (Alarm)        │
-                                                    │  - LED matrix (R4 WiFi)  │
-                                                    └──────────────────────────┘
-```
+⚙️ Gesture Processing Pipeline
 
----
+The inference pipeline consists of multiple stages:
 
-## Project Structure
+1. Landmark Acquisition
+21-point hand landmark extraction using MediaPipe
+Normalization to image-space coordinates
+2. Signal Conditioning
+Adaptive low-pass filtering via One Euro Filter
+Dynamic cutoff tuning based on instantaneous velocity
+Noise suppression while preserving rapid motion
+3. Temporal Modeling
+Per-finger abstraction using FingerUnit FSM
+States: IDLE → RISING → DWELL
+Captures motion phases and gesture lifecycle
+4. Gesture Isolation
+Winner-Takes-All (WTA) competitive selection
+Isolation threshold to suppress inter-finger crosstalk
+Ensures deterministic gesture attribution
+5. Gesture Inference
+Velocity peak detection with hysteresis
+Dwell-time validation and spatial tolerance checks
+Rejects jitter and tracking artifacts
+🧠 Interaction Model
 
-```
-modek/
-├── service1_capture.py      # Webcam capture + landmark streaming (Laptop 1)
-├── service2_analysis.py     # Analysis engine + demo UI (Laptop 2)
-├── arduino_client.py        # Arduino serial/wifi/none abstraction
-├── final.py                 # Original single-machine version (reference)
-├── .env                     # Arduino mode configuration
-├── .env.example             # Configuration template
-├── arduino/
-│   ├── sketch.ino           # Arduino Uno (USB serial)
-│   └── sketch_wifi.ino      # Arduino Uno R4 WiFi (HTTP)
-├── tests/
-│   ├── test_analysis.py     # 38 unit + mock tests (signal processing)
-│   └── test_arduino_client.py # 20 unit tests (Arduino client)
-├── docs/
-│   ├── ARCHITECTURE.md      # System design and data flow
-│   ├── SIGNAL_PROCESSING.md # OneEuroFilter, FSM, WTA explained
-│   ├── CALIBRATION.md       # Calibration phases and computation
-│   ├── API.md               # WebSocket + Arduino HTTP API
-│   └── OPERATIONS.md        # How to run, troubleshoot, demo guide
-├── pyproject.toml           # uv project + ruff config
-└── uv.lock
-```
+Modek implements a hierarchical gesture mapping system:
 
----
+Normal Layer
+Index → Light
+Middle → Fan
+Ring/Pinky → Alarm
+Advanced Layer (Pinch Activated)
+Middle → AC
+Ring/Pinky → TV
 
-## Quick Start
+A thumb–index pinch gesture acts as a state transition trigger between layers, enabling context-aware interaction.
 
-### Prerequisites
-- Python 3.11
-- [uv](https://docs.astral.sh/uv/) package manager
-- Webcam
+🔌 Hardware Integration
 
-### Install
-```bash
-uv sync
-```
+The system includes a hardware abstraction layer supporting:
 
-### Configure Arduino (optional)
-```bash
-# Edit .env — default is none (UI only, no hardware needed)
-ARDUINO_MODE=none       # none | serial | wifi
-ARDUINO_PORT=COM3       # serial only
-ARDUINO_HOST=192.168.x.x  # wifi only
-```
+Serial (UART) communication with Arduino
+HTTP-based communication (WiFi / ESP32)
+Null fallback mode for software-only operation
 
-### Run (same machine)
-```bash
-# Terminal 1
-uv run service2_analysis.py --port 8765
+This ensures fault tolerance and seamless operation across different hardware configurations.
 
-# Terminal 2
-uv run service1_capture.py --host 127.0.0.1 --port 8765
-```
+🎯 Calibration & Adaptation
 
-### Run (two laptops on hotspot)
-```bash
-# Laptop 2
-uv run service2_analysis.py --port 8765
+Modek incorporates an online calibration pipeline:
 
-# Laptop 1 (replace with Laptop 2's IP)
-uv run service1_capture.py --host 192.168.x.x --port 8765
-```
+Computes user-specific displacement ranges
+Derives velocity thresholds dynamically
+Establishes stability tolerances for dwell detection
 
-See [docs/OPERATIONS.md](docs/OPERATIONS.md) for the full operational guide.
+This enables adaptive normalization, improving robustness across:
 
----
-
-## Dependencies
-
-| Package | Version | Purpose |
-|---------|---------|---------|
-| `mediapipe` | 0.10.14 | Hand landmark detection |
-| `opencv-python` | ≥4.13 | Webcam capture + overlay rendering |
-| `PyQt6` | ≥6.10 | Desktop UI |
-| `numpy` | ≥2.2 | Vector math |
-| `websockets` | ≥16.0 | Service-to-service communication |
-| `pyserial` | ≥3.5 | Arduino USB serial communication |
-| `httpx` | ≥0.28 | Arduino WiFi HTTP communication |
-| `python-dotenv` | ≥1.2 | `.env` configuration loading |
-
----
-
-## Testing
-
-```bash
-uv run pytest tests/ -v
-```
-
-58 tests covering: OneEuroFilter, FingerUnit FSM, WTA isolation, Processor helpers, calibration, pinch layer, progress clamping, Arduino toggle logic, Arduino fallback behaviour.
-
----
-
-## Further Reading
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [Signal Processing](docs/SIGNAL_PROCESSING.md)
-- [Calibration](docs/CALIBRATION.md)
-- [WebSocket + Arduino API](docs/API.md)
-- [Operations Guide](docs/OPERATIONS.md)
+Different users
+Hand sizes
+Camera distances
+Environmental noise conditions
+🚀 Core Features
+Real-time 3D hand landmark tracking (MediaPipe)
+FSM-based temporal gesture segmentation
+Velocity peak detection with dwell-time hysteresis
+Winner-Takes-All (WTA) signal isolation
+Adaptive filtering (One Euro Filter)
+Low-latency WebSocket streaming architecture
+Pinch-based hierarchical interaction model
+Arduino integration (UART / WiFi / fallback)
+Dynamic, user-specific calibration
+🛠️ Tech Stack
+Language: Python
+Computer Vision: OpenCV, MediaPipe
+UI Framework: PyQt6
+Networking: WebSockets
+Numerical Computing: NumPy
+Hardware: Arduino
